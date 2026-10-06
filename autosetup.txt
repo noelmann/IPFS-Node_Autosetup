@@ -1,0 +1,172 @@
+#!/bin/bash
+
+BIYellow='\033[1;93m'     # Yellow
+BIGreen='\033[1;92m'      # Green
+BIRed='\033[1;91m'        # Red
+RESET='\033[0m'
+
+#checking if script is being run as superuser(root)
+if [[ $EUID -ne 1000 ]]; then
+   echo -e "${BIRed}[!]This script must be run without root privileges."
+   exit 1
+fi
+
+#creating crontab to automatically set correct time on system startup
+command='sudo date -s "$(curl -s --head http://google.com | grep ^Date: | sed "s/Date: //g")"'
+job="@reboot $command"
+cat <(fgrep -i -v "$command" <(crontab -l)) <(echo "$job") | crontab -
+
+
+#setting correct system time for current session
+eval "$command"
+echo "----------------------------------------"
+echo -e "${BIYellow}[!]Time automatically set${BIGreen}"
+echo "----------------------------------------"
+echo $(timedatectl | grep  "Local time")
+echo "----------------------------------------"
+
+#setting firewall settings
+echo -e "${BIYellow}[!]Setting firewall settings${BIGreen}"
+sudo ufw allow 22/tcp
+sudo ufw allow 4001/tcp
+sudo ufw allow 4001/udp
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw enable
+
+#setting keyboard layout
+echo -e "${BIYellow}[!]Setting keyboard layout to german(DE)${BIGreen}"
+#echo "----------------------------------------"
+sudo tee /etc/default/keyboard > /dev/null <<'EOF'
+XKBMODEL="pc105"
+XKBLAYOUT="de"
+XKBVARIANT=""
+XKBOPTIONS=""
+BACKSPACE="guess"
+EOF
+
+echo -e "${BIYellow}[!]Keyboard layout configuration set to${BIGreen}"
+echo $(cat /etc/default/keyboard | grep XKBLAYOUT)
+#echo "------------------------------------"
+
+
+#update and upgrade apt packages
+echo -e "${BIYellow}[!]Updating apt package list${BIGreen}"
+echo $(sudo apt-get update -y)
+echo -e "${BIYellow}[!]Upgrading apt packages${BIGreen}"
+echo $(sudo apt-get upgrade -y)
+
+#docker installation
+
+echo -e "${BIYellow}[!]Updating package manager metadata${BIGreen}"
+echo $(sudo apt-get update)
+echo -e "${BIYellow}[!]Installing CA certificates${BIGreen}"
+echo $(sudo apt-get install -y ca-certificates curl)
+echo -e "${BIYellow}[!]Installing apt keyrings${BIGreen}"
+echo $(sudo install -m 0755 -d /etc/apt/keyrings)
+echo -e "${BIYellow}[!]Adding docker ubuntu gpg key to apt keyrings${BIGreen}"
+echo $(sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  -o /etc/apt/keyrings/docker.asc)
+echo -e "${BIYellow}[!]Adding read permission for everyone for docker gpg key file${BIGreen}"
+echo $(sudo chmod a+r /etc/apt/keyrings/docker.asc)
+echo -e "${BIYellow}[!]Adding docker repository to apt sources${BIGreen}"
+echo $(echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+$(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+sudo tee /etc/apt/sources.list.d/docker.list > /dev/null)
+echo -e "${BIYellow}[!]Updating package manager metadata${BIGreen}"
+echo $(sudo apt-get update)
+echo -e "${BIYellow}[!]Installing docker packages${BIGreen}"
+echo $(sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
+
+echo -e "${BIYellow}[!]Deleting existing IPFS docker container${BIGreen}"
+sudo docker rm -f ipfs_node_5
+echo -e "${BIYellow}[!]Deleting existing IPFS node folders${BIGreen}"
+sudo rm -rf /home/ubuntu/ipfs-node
+
+echo -e "${BIYellow}[!]Creating folders for IPFS node${BIGreen}"
+mkdir -p /home/ubuntu/ipfs-node/ipfs-init.d
+mkdir -p /home/ubuntu/ipfs-node/ipfs_staging
+mkdir -p /home/ubuntu/ipfs-node/ipfs_data
+sudo chown -R ubuntu:ubuntu /home/ubuntu/ipfs-node
+
+echo -e "${BIYellow}[!]Creating docker-compose.yml${BIGreen}"
+cat > ~/ipfs-node/docker-compose.yml << 'EOF'
+services:
+  ipfs:
+    image: ipfs/kubo:v0.42.0
+    container_name: ipfs_node_5
+    restart: unless-stopped
+    environment:
+      - LIBP2P_FORCE_PNET=1
+    volumes:
+      - ./ipfs_staging:/export
+      - ./ipfs_data:/data/ipfs
+      - ./swarm.key:/data/ipfs/swarm.key
+      - ./ipfs-init.d:/container-init.d:ro
+    ports:
+      - "4001:4001"
+      - "4001:4001/udp"
+EOF
+
+#Getting swarm key from user
+correctSwarmKeyEntered=false
+swarm_key="empty"
+while [ "$correctSwarmKeyEntered" = "false" ]
+do
+echo -e "${BIRed}[!]Please enter the swarm key of the IPFS swarm that you want to join${RESET}"
+read -s swarm_key
+echo "You entered:$swarm_key"
+echo "Is it correct?(y/n)"
+read confirmation
+if [[ "$confirmation" = "y" || "$confirmation" = "Y" || "$confirmation" = "yes" || "$confirmation" = "Yes" ]]; then
+correctSwarmKeyEntered=true
+fi
+done
+
+
+#Writing swarm key into file
+#echo "[!]Deleting existing swarm key"
+#if [ -d ~/ipfs-node/swarm.key ]; then
+#    sudo rm -rf ~/ipfs-node/swarm.key
+#fi
+
+echo -e "${BIYellow}[!]Writing swarm key into file${BIGreen}"
+cat >  ~/ipfs-node/swarm.key << 'EOF'
+/key/swarm/psk/1.0.0/
+/base16/
+EOF
+#8e660a14fb8c59d9cc497c961ff76e6990211f7d7c4025405858fe53eea0a0f5
+
+echo $swarm_key >> ~/ipfs-node/swarm.key
+
+chmod 600 ~/ipfs-node/swarm.key
+
+#Creating init script
+echo -e "${BIYellow}[!]Creating init script for IPFS${BIGreen}"
+cat > ~/ipfs-node/ipfs-init.d/01-private-network.sh << 'EOF'
+#!/bin/sh
+set -ex
+
+ipfs bootstrap rm all
+ipfs config Routing.Type 'dhtclient'
+ipfs config --json Addresses.AppendAnnounce '["/ip4/139.6.64.182/tcp/4001"]'
+ipfs config --json AutoConf.Enabled false
+
+ipfs bootstrap add "/ip4/139.6.64.211/tcp/4001/p2p/12D3KooWMMraXeGujhHD8qftdLeH5RnTeQjYuTed64sCBHaamjAf"
+ipfs bootstrap add "/ip4/139.6.64.212/tcp/4001/p2p/12D3KooWQ6WtB3C9KEHnh2vWKTR6tQZDU6TNAAYn24hzfpbEFxGq"
+EOF
+echo $(chmod +x ~/ipfs-node/ipfs-init.d/01-private-network.sh)
+
+#Starting IPFS node
+echo -e "${BIYellow}[!]Starting IPFS node(launching docker container)${BIGreen}"
+echo $(cd ~/ipfs-node/ && sudo docker compose up -d)
+
+sleep 5
+
+#Connecting to Pi 4
+echo -e "${BIYellow}[!]Connecting to Pi 4${BIGreen}"
+cd ~/ipfs-node/ && sudo docker compose exec -T ipfs ipfs swarm connect /ip4/139.6.64.214/tcp/4001/p2p/12D3KooWPbYXsmg2sEnJuTMKaGb8Cdzq34iD5ggGXfYFFXibgJ9M
+
+#Discovery test of Pi 3
+echo -e "${BIYellow}[!]Testing if id of Pi 3 can be resolved${BIGreen}"
+echo $(sudo docker exec ipfs_node_5 ipfs routing findpeer 12D3KooWH3fLhk2eWk6HJEjsuVati9T1LViEdHBVqEBEjSqNd2c4)
