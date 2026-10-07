@@ -89,8 +89,25 @@ announce_ip="empty"
 echo -e "${BIRed}[!]Please enter the desired name of the docker container:${RESET}"
 read docker_container_name
 
+
+correctDHTtypeEntered=false
+dht_type=0
+
+while [ "$correctDHTtypeEntered" = "false" ]
+do
 echo -e "${BIRed}[!]Please enter the desired IPFS routing type:${RESET}"
-read ipfs_routing_type
+echo -e "${BIYellow}[1]DHTclient${RESET}"
+echo -e "${BIYellow}[2]DHTserver${RESET}"
+read dht_type
+if [[ "$dht_type" = "1" || "$dht_type" = "2" ]]; then
+correctDHTtypeEntered=true
+if [ "$dht_type" = "1" ]; then
+ipfs_routing_type="dhtclient"
+elif [ "$dht_type" = "2" ]; then
+ipfs_routing_type="dhtserver"
+fi
+fi
+done
 
 echo -e "${BIRed}[!]Please enter the ip with which the node should announce itself[Can be left empty]:${RESET}"
 read announce_ip
