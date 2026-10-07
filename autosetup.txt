@@ -78,8 +78,32 @@ echo $(sudo apt-get update)
 echo -e "${BIYellow}[!]Installing docker packages${BIGreen}"
 echo $(sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 
+
+docker_container_name="ipfs_node"
+ipfs_routing_type="dhtclient"
+bootstrap_1_value="empty"
+bootstrap_2_value="empty"
+announce_ip="empty"
+
+#Getting values for environment variables
+echo -e "${BIRed}[!]Please enter the desired name of the docker container:${RESET}"
+read docker_container_name
+
+echo -e "${BIRed}[!]Please enter the desired IPFS routing type:${RESET}"
+read ipfs_routing_type
+
+echo -e "${BIRed}[!]Please enter the ip with which the node should announce itself[Can be left empty]:${RESET}"
+read announce_ip
+
+echo -e "${BIRed}[!]Please enter the value of bootstrap peer 1:${RESET}"
+read bootstrap_1_value
+
+echo -e "${BIRed}[!]Please enter the value of bootstrap peer 2:${RESET}"
+read bootstrap_2_value
+
+
 echo -e "${BIYellow}[!]Deleting existing IPFS docker container${BIGreen}"
-sudo docker rm -f ipfs_node_5
+sudo docker rm -f "$docker_container_name"
 echo -e "${BIYellow}[!]Deleting existing IPFS node folders${BIGreen}"
 sudo rm -rf /home/ubuntu/ipfs-node
 
@@ -89,15 +113,31 @@ mkdir -p /home/ubuntu/ipfs-node/ipfs_staging
 mkdir -p /home/ubuntu/ipfs-node/ipfs_data
 sudo chown -R ubuntu:ubuntu /home/ubuntu/ipfs-node
 
+
+#Writing values into env file
+echo -e "${BIYellow}[!]Writing values into environment file${BIGreen}"
+cat > ~/ipfs-node/.env << EOF
+CONTAINER_NAME=$docker_container_name
+IPFS_ROUTING_TYPE=$ipfs_routing_type
+ANNOUNCE_IP=$announce_ip
+BOOTSTRAP_PEER_1=$bootstrap_1_value
+BOOTSTRAP_PEER_2=$bootstrap_2_value
+EOF
+
+
 echo -e "${BIYellow}[!]Creating docker-compose.yml${BIGreen}"
 cat > ~/ipfs-node/docker-compose.yml << 'EOF'
 services:
   ipfs:
-    image: ipfs/kubo:v0.42.0
-    container_name: ipfs_node_5
+    image: ipfs/kubo:latest
+    container_name: ${CONTAINER_NAME:-ipfs_node}
     restart: unless-stopped
     environment:
       - LIBP2P_FORCE_PNET=1
+      - IPFS_ROUTING_TYPE=${IPFS_ROUTING_TYPE:-dhtclient}
+      - BOOTSTRAP_PEER_1=${BOOTSTRAP_PEER_1}
+      - BOOTSTRAP_PEER_2=${BOOTSTRAP_PEER_2}
+      - ANNOUNCE_IP=${ANNOUNCE_IP}
     volumes:
       - ./ipfs_staging:/export
       - ./ipfs_data:/data/ipfs
@@ -107,6 +147,8 @@ services:
       - "4001:4001"
       - "4001:4001/udp"
 EOF
+
+
 
 #Getting swarm key from user
 correctSwarmKeyEntered=false
@@ -148,13 +190,25 @@ cat > ~/ipfs-node/ipfs-init.d/01-private-network.sh << 'EOF'
 set -ex
 
 ipfs bootstrap rm all
-ipfs config Routing.Type 'dhtclient'
-ipfs config --json Addresses.AppendAnnounce '["/ip4/139.6.64.182/tcp/4001"]'
+
+ipfs config Routing.Type "${IPFS_ROUTING_TYPE:-dhtclient}"
+if [ -n "$ANNOUNCE_IP" ]; then
+    ipfs config --json Addresses.AppendAnnounce "[\"/ip4/$ANNOUNCE_IP/tcp/4001\"]"
+fi
+
 ipfs config --json AutoConf.Enabled false
 
-ipfs bootstrap add "/ip4/139.6.64.211/tcp/4001/p2p/12D3KooWMMraXeGujhHD8qftdLeH5RnTeQjYuTed64sCBHaamjAf"
-ipfs bootstrap add "/ip4/139.6.64.212/tcp/4001/p2p/12D3KooWQ6WtB3C9KEHnh2vWKTR6tQZDU6TNAAYn24hzfpbEFxGq"
+if [ -n "$BOOTSTRAP_PEER_1" ]; then
+    ipfs bootstrap add "$BOOTSTRAP_PEER_1"
+fi
+
+if [ -n "$BOOTSTRAP_PEER_2" ]; then
+    ipfs bootstrap add "$BOOTSTRAP_PEER_2"
+fi
 EOF
+
+#ipfs bootstrap add "/ip4/139.6.64.211/tcp/4001/p2p/12D3KooWMMraXeGujhHD8qftdLeH5RnTeQjYuTed64sCBHaamjAf"
+#ipfs bootstrap add "/ip4/139.6.64.212/tcp/4001/p2p/12D3KooWQ6WtB3C9KEHnh2vWKTR6tQZDU6TNAAYn24hzfpbEFxGq"
 echo $(chmod +x ~/ipfs-node/ipfs-init.d/01-private-network.sh)
 
 #Starting IPFS node
@@ -167,6 +221,8 @@ sleep 5
 echo -e "${BIYellow}[!]Connecting to Pi 4${BIGreen}"
 cd ~/ipfs-node/ && sudo docker compose exec -T ipfs ipfs swarm connect /ip4/139.6.64.214/tcp/4001/p2p/12D3KooWPbYXsmg2sEnJuTMKaGb8Cdzq34iD5ggGXfYFFXibgJ9M
 
+sleep 5
+
 #Discovery test of Pi 3
 echo -e "${BIYellow}[!]Testing if id of Pi 3 can be resolved${BIGreen}"
-echo $(sudo docker exec ipfs_node_5 ipfs routing findpeer 12D3KooWH3fLhk2eWk6HJEjsuVati9T1LViEdHBVqEBEjSqNd2c4)
+cd ~/ipfs-node/ && sudo docker compose exec -T ipfs ipfs routing findpeer 12D3KooWH3fLhk2eWk6HJEjsuVati9T1LViEdHBVqEBEjSqNd2c4
