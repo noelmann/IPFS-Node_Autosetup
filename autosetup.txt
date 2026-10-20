@@ -162,6 +162,7 @@ services:
     ports:
       - "4001:4001"
       - "4001:4001/udp"
+      - "127.0.0.1:5001:5001"
 EOF
 
 
@@ -204,6 +205,8 @@ echo -e "${BIYellow}[!]Creating init script for IPFS${BIGreen}"
 cat > ~/ipfs-node/ipfs-init.d/01-private-network.sh << 'EOF'
 #!/bin/sh
 set -ex
+
+ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
 
 ipfs bootstrap rm all
 
