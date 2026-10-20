@@ -14,8 +14,7 @@ fi
 #creating crontab to automatically set correct time on system startup
 command='sudo date -s "$(curl -s --head http://google.com | grep ^Date: | sed "s/Date: //g")"'
 job="@reboot $command"
-cat <(fgrep -i -v "$command" <(crontab -l)) <(echo "$job") | crontab -
-
+( sudo crontab -l 2>/dev/null | grep -Fv "$command"; echo "$job" ) | sudo crontab -
 
 #setting correct system time for current session
 eval "$command"
